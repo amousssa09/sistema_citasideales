@@ -1157,8 +1157,13 @@ input[type=range] {
   .form-row { grid-template-columns: 1fr; }
   .invest-options { grid-template-columns: repeat(2, 1fr); }
 }
-</style>
-</head>
+
+/* Shop items type colors */
+.activity-card.shop::before { background: linear-gradient(135deg, rgba(251,191,36,0.08), transparent); }
+/* Rival badge pulse */
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.6} }
+
+</style></head>
 <body>
 
 <div id="stars"></div>
@@ -1168,6 +1173,7 @@ input[type=range] {
     <div class="logo">Ideal Dates</div>
     <div class="header-right">
       <div class="streak-badge" id="streakBadge">🔥 <span id="streakCount">0</span> días</div>
+      <div class="streak-badge" style="background:rgba(251,191,36,0.12);border-color:rgba(251,191,36,0.3);color:var(--gold)">🪙 <span id="coinsCount">0</span></div>
       <div class="points-badge">✦ <span id="pointsCount">0</span> PI</div>
     </div>
   </header>
@@ -1186,6 +1192,9 @@ input[type=range] {
       💬 Chat
       <span class="notif" id="chatNotif" style="display:none"></span>
     </button>
+    <button class="nav-btn" onclick="showSection('tienda')" id="nav-tienda">
+      🛍 Tienda
+    </button>
   </nav>
 
   <div id="content">
@@ -1194,8 +1203,6 @@ input[type=range] {
 </div>
 
 <div class="toast-container" id="toastContainer"></div>
-
-<!-- Overlay container -->
 <div id="overlayContainer"></div>
 
 <script>
@@ -1203,9 +1210,11 @@ const GROQ_KEY = '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';
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
 
 // ---- State ----
-let state = JSON.parse(localStorage.getItem('idealDatesState') || 'null') || {
+let state = JSON.parse(localStorage.getItem('idealDatesState2') || 'null') || {
   points: 150,
+  coins: 80,
   streak: 0,
+  aspiration: 50,
   lastTaskDate: null,
   tasks: [],
   girls: [
@@ -1221,15 +1230,20 @@ let state = JSON.parse(localStorage.getItem('idealDatesState') || 'null') || {
       chatHistory: [],
       datesCount: 0,
       birthday: null,
+      rival: false,
+      rivalDeadline: null,
+      scheduledDate: null,
     }
   ],
+  inventory: [],
   notifications: [],
   nextGirlId: 2,
   nextTaskId: 1,
+  lastEventTs: 0,
 };
 
 function save() {
-  localStorage.setItem('idealDatesState', JSON.stringify(state));
+  localStorage.setItem('idealDatesState2', JSON.stringify(state));
 }
 
 function getStatus(love) {
@@ -1241,7 +1255,7 @@ function getStatus(love) {
 }
 
 function statusLabel(s) {
-  return { cold: 'Fría ❄️', warming: 'Calentando 🌸', hot: 'Enamorada 💜', max: '¡Perfecta! ✨', unknown: 'Desconocida' }[s] || s;
+  return { cold: 'Fría ❄️', warming: 'Calentando 🌸', hot: 'Enamorada 💜', max: '¡Perfecta! ✨' }[s] || 'Desconocida';
 }
 
 // ---- Stars ----
@@ -1265,13 +1279,14 @@ function showSection(id) {
   else if (id === 'chicas') renderChicas(c);
   else if (id === 'citas') renderCitas(c);
   else if (id === 'chat') renderChat(c);
+  else if (id === 'tienda') renderTienda(c);
   updateHeader();
-  checkNotifications();
 }
 
 function updateHeader() {
   document.getElementById('pointsCount').textContent = state.points;
   document.getElementById('streakCount').textContent = state.streak;
+  document.getElementById('coinsCount').textContent = state.coins;
 }
 
 function toast(msg, type = 'info', icon = '✦') {
@@ -1283,6 +1298,7 @@ function toast(msg, type = 'info', icon = '✦') {
 }
 
 function openOverlay(html, onOpen) {
+  closeOverlay();
   const el = document.createElement('div');
   el.className = 'overlay';
   el.id = 'modalOverlay';
@@ -1297,35 +1313,59 @@ function closeOverlay() {
   if (el) el.remove();
 }
 
-// ---- Notifications ----
-function checkNotifications() {
-  // Random events: birthday, invite from girl
-  const notifications = [...state.notifications];
-  // Clear seen ones
-  state.notifications = notifications.filter(n => !n.seen);
+// ---- Events ----
+const EVENT_INTERVAL_MS = 4 * 60 * 60 * 1000; // every 4 hours real time; for demo we check on load
+
+function checkAndFireEvent() {
+  if (state.girls.length === 0) return;
+  const now = Date.now();
+  const elapsed = now - (state.lastEventTs || 0);
+  // Fire event if >4h passed OR on first load after a day
+  if (elapsed < 60 * 60 * 1000) return; // at least 1h between events for demo purposes (change to 4h for real)
+  state.lastEventTs = now;
+  generateRandomEvent();
+  save();
+  const notifEl = document.getElementById('chatNotif');
+  if (notifEl) notifEl.style.display = 'block';
+  if (document.querySelector('.nav-btn.active')?.id === 'nav-tareas') showSection('tareas');
 }
 
 function generateRandomEvent() {
   if (state.girls.length === 0) return;
   const girl = state.girls[Math.floor(Math.random() * state.girls.length)];
-  const events = [
-    { type: 'invite', icon: '💌', title: `${girl.name} te invita a salir`, desc: 'Quiere ir a tomar un café esta tarde. ¿Aceptas?', girl: girl.id },
-    { type: 'birthday', icon: '🎂', title: `¡Hoy es el cumpleaños de ${girl.name}!`, desc: 'No te olvides de celebrarlo con ella.', girl: girl.id },
-    { type: 'message', icon: '💬', title: `${girl.name} te ha escrito`, desc: '¿Vas a dejarla sin respuesta?', girl: girl.id },
+  const actNames = ['un café', 'una cena', 'un paseo', 'el cine', 'la playa'];
+  const place = actNames[Math.floor(Math.random() * actNames.length)];
+  const types = [
+    { type:'invite', icon:'💌', title:`${girl.name} te propone salir`, desc:`"¿Qué tal si quedamos para ${place}?" — respóndele en el chat.`, girl: girl.id },
+    { type:'birthday', icon:'🎂', title:`🎉 Hoy es el cumpleaños de ${girl.name}!`, desc:'¡No lo olvides! Un regalo o mensaje especial hará su día.', girl: girl.id },
+    { type:'message', icon:'💬', title:`${girl.name} te ha escrito`, desc:'"¿Sigues por ahí?" — lleva un rato esperando.', girl: girl.id },
+    { type:'rival', icon:'⚠️', title:`¡Alguien más corteja a ${girl.name}!`, desc:'Un rival ha aparecido. Completa tareas con bono de tiempo para ganar +PI extra y reconquistarla.', girl: girl.id },
+    { type:'mood', icon:'✨', title:`${girl.name} está de muy buen humor`, desc:'Hoy todo lo que hagas con ella tendrá +30% de efecto.', girl: girl.id },
   ];
-  const ev = events[Math.floor(Math.random() * events.length)];
-  ev.id = Date.now();
+  const ev = { ...types[Math.floor(Math.random() * types.length)], id: Date.now() };
+
+  // Apply rival effect
+  if (ev.type === 'rival') {
+    const g = state.girls.find(x => x.id === girl.id);
+    if (g) {
+      g.rival = true;
+      g.rivalDeadline = Date.now() + 48 * 60 * 60 * 1000; // 48h to beat rival
+    }
+  }
+  if (ev.type === 'mood') {
+    const g = state.girls.find(x => x.id === girl.id);
+    if (g) g.goodMoodUntil = Date.now() + 3 * 60 * 60 * 1000;
+  }
+
   state.notifications.push(ev);
-  save();
 }
 
 // ---- Tasks ----
 function renderTareas(c) {
-  const today = new Date().toDateString();
   const pending = state.tasks.filter(t => !t.completed);
   const done = state.tasks.filter(t => t.completed);
+  const coins = state.coins;
 
-  // Check streak
   const notifs = state.notifications.length > 0 ? `
     <div class="notif-bar">
       ${state.notifications.slice(0,3).map(n => `
@@ -1353,12 +1393,12 @@ function renderTareas(c) {
         <div class="stat-lbl">Racha días</div>
       </div>
       <div class="stat-box">
-        <div class="stat-val">${pending.length}</div>
-        <div class="stat-lbl">Pendientes</div>
+        <div class="stat-val">🪙${coins}</div>
+        <div class="stat-lbl">Monedas</div>
       </div>
       <div class="stat-box">
-        <div class="stat-val">${done.length}</div>
-        <div class="stat-lbl">Completadas</div>
+        <div class="stat-val">⭐${state.aspiration}</div>
+        <div class="stat-lbl">Aspiración</div>
       </div>
     </div>
 
@@ -1371,7 +1411,7 @@ function renderTareas(c) {
       ${state.tasks.length === 0 ? `
         <div class="empty-state">
           <div class="empty-icon">📋</div>
-          <p>No hay tareas. ¡Añade una para empezar a ganar puntos!</p>
+          <p>No hay tareas. ¡Añade una para empezar a ganar puntos y monedas!</p>
         </div>
       ` : ''}
       ${pending.map(t => renderTaskCard(t)).join('')}
@@ -1383,16 +1423,26 @@ function renderTareas(c) {
   `;
 }
 
+const PRIORITY_LABELS = { alta: '🔴 Alta', media: '🟡 Media', baja: '🟢 Baja' };
+const PRIORITY_POINTS = { alta: [40, 60], media: [20, 35], baja: [8, 15] };
+const PRIORITY_COINS = { alta: 20, media: 10, baja: 5 };
+
 function renderTaskCard(t) {
   const now = new Date();
   const deadline = t.deadline ? new Date(t.deadline) : null;
   let deadlineClass = '';
   let deadlineStr = '';
+  let rivalBonus = '';
   if (deadline && !t.completed) {
     const diff = deadline - now;
     if (diff < 0) { deadlineClass = 'overdue'; deadlineStr = '⚠ Vencida'; }
     else if (diff < 86400000) { deadlineClass = 'soon'; deadlineStr = '⏰ Hoy'; }
     else deadlineStr = '📅 ' + deadline.toLocaleDateString('es-ES', {day:'numeric',month:'short'});
+  }
+  // Check rival bonuses
+  const rivalGirls = state.girls.filter(g => g.rival && g.rivalDeadline > Date.now());
+  if (rivalGirls.length > 0 && !t.completed) {
+    rivalBonus = `<span style="color:var(--red);font-size:11px">⚡ Rival: bonus x1.5</span>`;
   }
 
   return `
@@ -1404,10 +1454,15 @@ function renderTaskCard(t) {
         <div class="task-name">${t.name}</div>
         <div class="task-meta">
           <span class="cat-badge">${t.category}</span>
+          <span style="font-size:11px;color:var(--text3)">${PRIORITY_LABELS[t.priority||'media']}</span>
           ${deadlineStr ? `<span class="task-deadline ${deadlineClass}">${deadlineStr}</span>` : ''}
+          ${rivalBonus}
         </div>
       </div>
-      <div class="task-points">✦ ${t.points}</div>
+      <div style="text-align:right">
+        <div class="task-points">✦ ${t.points}</div>
+        <div style="font-size:11px;color:var(--gold)">🪙 ${t.coins||0}</div>
+      </div>
       ${!t.completed ? `<button class="btn btn-sm btn-danger" onclick="deleteTask('${t.id}')">×</button>` : ''}
     </div>
   `;
@@ -1419,13 +1474,32 @@ function toggleTask(id) {
   const now = new Date();
   const deadline = t.deadline ? new Date(t.deadline) : null;
   let earned = t.points;
+  let earnedCoins = t.coins || 0;
+
+  // Time penalty
   if (deadline && now > deadline) {
     const overMin = (now - deadline) / 60000;
-    earned = overMin > 1440 ? 0 : Math.floor(t.points / 2);
+    const factor = overMin > 1440 ? 0 : 0.5;
+    earned = Math.floor(earned * factor);
+    earnedCoins = Math.floor(earnedCoins * factor);
   }
+
+  // Rival bonus: x1.5 if any active rival
+  const rivalGirls = state.girls.filter(g => g.rival && g.rivalDeadline > Date.now());
+  if (rivalGirls.length > 0) {
+    earned = Math.floor(earned * 1.5);
+    earnedCoins = Math.floor(earnedCoins * 1.5);
+    // Beat the rival slightly
+    rivalGirls.forEach(g => {
+      g.love = Math.min(100, g.love + 3);
+    });
+  }
+
   t.completed = true;
   t.completedAt = now.toISOString();
   state.points += earned;
+  state.coins += earnedCoins;
+  state.aspiration = Math.min(100, (state.aspiration || 50) + 1);
 
   // Streak
   const todayStr = now.toDateString();
@@ -1437,8 +1511,8 @@ function toggleTask(id) {
 
   save();
   updateHeader();
-  if (earned > 0) toast(`+${earned} PI ganados 🎉`, 'success', '✦');
-  else toast('Completada tarde, 0 PI', 'error', '⚠');
+  if (earned > 0) toast(`+${earned} PI y 🪙${earnedCoins} monedas 🎉`, 'success', '✦');
+  else toast('Completada tarde, 0 recompensas', 'error', '⚠');
   showSection('tareas');
 }
 
@@ -1454,7 +1528,7 @@ function openNewTask() {
     <div class="modal">
       <button class="close-btn" onclick="closeOverlay()">×</button>
       <div class="modal-title">Nueva Tarea</div>
-      <div class="modal-sub">Define la tarea y cuánto vale tu esfuerzo</div>
+      <div class="modal-sub">Los puntos y monedas se asignan según dificultad y prioridad.</div>
       <div class="form-group">
         <label class="form-label">Nombre</label>
         <input class="form-input" id="tName" placeholder="Ej: Ir al gimnasio, Estudiar 2h...">
@@ -1467,21 +1541,34 @@ function openNewTask() {
           </select>
         </div>
         <div class="form-group">
+          <label class="form-label">Prioridad</label>
+          <select class="form-input" id="tPriority" onchange="updateTaskPreview()">
+            <option value="alta">🔴 Alta (40-60 PI, 🪙20)</option>
+            <option value="media" selected>🟡 Media (20-35 PI, 🪙10)</option>
+            <option value="baja">🟢 Baja (8-15 PI, 🪙5)</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Dificultad</label>
+          <select class="form-input" id="tDiff" onchange="updateTaskPreview()">
+            <option value="1">Fácil ×1</option>
+            <option value="2" selected>Normal ×1.5</option>
+            <option value="3">Difícil ×2</option>
+          </select>
+        </div>
+        <div class="form-group">
           <label class="form-label">Fecha límite</label>
           <input class="form-input" id="tDeadline" type="datetime-local">
         </div>
       </div>
-      <div class="form-group">
-        <label class="form-label">Puntos (PI)</label>
-        <div class="points-slider-wrap">
-          <div class="points-slider-top">
-            <span>Esfuerzo</span>
-            <span class="points-val" id="sliderVal">25</span>
-          </div>
-          <input type="range" min="5" max="150" step="5" value="25" id="tPoints" oninput="document.getElementById('sliderVal').textContent=this.value">
-        </div>
+      <div id="taskPreview" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:16px;display:flex;gap:20px;align-items:center">
+        <div><span style="color:var(--text3);font-size:11px">PI estimados</span><br><strong id="previewPi" style="color:var(--accent);font-size:18px">25–35</strong></div>
+        <div><span style="color:var(--text3);font-size:11px">Monedas</span><br><strong id="previewCoins" style="color:var(--gold);font-size:18px">🪙10</strong></div>
+        <div style="font-size:12px;color:var(--text2)">Completar a tiempo da el máximo. Tarde da la mitad. ⚡ Rival activo = ×1.5</div>
       </div>
-      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">
+      <div style="display:flex;gap:8px;justify-content:flex-end">
         <button class="btn btn-ghost" onclick="closeOverlay()">Cancelar</button>
         <button class="btn btn-primary" onclick="saveTask()">Guardar</button>
       </div>
@@ -1489,40 +1576,91 @@ function openNewTask() {
   `);
 }
 
+function updateTaskPreview() {
+  const p = document.getElementById('tPriority')?.value || 'media';
+  const d = parseInt(document.getElementById('tDiff')?.value || 2);
+  const [min, max] = PRIORITY_POINTS[p];
+  const mult = [1, 1.5, 2][d - 1];
+  document.getElementById('previewPi').textContent = `${Math.floor(min*mult)}–${Math.floor(max*mult)}`;
+  document.getElementById('previewCoins').textContent = `🪙${PRIORITY_COINS[p] * (d === 3 ? 2 : d)}`;
+}
+
 function saveTask() {
   const name = document.getElementById('tName').value.trim();
   if (!name) { toast('Escribe un nombre', 'error', '⚠'); return; }
+  const priority = document.getElementById('tPriority').value;
+  const diff = parseInt(document.getElementById('tDiff').value);
+  const [min, max] = PRIORITY_POINTS[priority];
+  const mult = [1, 1.5, 2][diff - 1];
+  const points = Math.floor((min + Math.random() * (max - min)) * mult);
+  const coins = PRIORITY_COINS[priority] * diff;
+
   state.tasks.unshift({
     id: 't' + (state.nextTaskId++),
     name,
     category: document.getElementById('tCat').value,
+    priority,
     deadline: document.getElementById('tDeadline').value || null,
-    points: parseInt(document.getElementById('tPoints').value),
+    points,
+    coins,
     completed: false,
     createdAt: new Date().toISOString(),
   });
   save();
   closeOverlay();
-  toast('Tarea creada ✓', 'success', '📋');
+  toast(`Tarea creada — ✦${points} PI y 🪙${coins} en juego`, 'success', '📋');
   showSection('tareas');
 }
 
 function handleNotif(id) {
   const n = state.notifications.find(x => x.id == id);
   if (!n) return;
-  if (n.type === 'invite' || n.type === 'message') {
+  if (n.type === 'invite' || n.type === 'message' || n.type === 'mood') {
     dismissNotif(null, id);
+    currentChatGirl = n.girl;
     showSection('chat');
+  } else if (n.type === 'birthday') {
+    dismissNotif(null, id);
+    openBirthdayModal(n.girl);
   } else {
     dismissNotif(null, id);
+    showSection('tareas');
   }
+}
+
+function openBirthdayModal(girlId) {
+  const g = state.girls.find(x => x.id === girlId);
+  if (!g) return;
+  openOverlay(`
+    <div class="modal" style="text-align:center">
+      <div style="font-size:48px;margin-bottom:12px">🎂</div>
+      <div class="modal-title">¡Feliz cumpleaños, ${g.name}!</div>
+      <div class="modal-sub">Hoy es su día especial. ¿La sorprendes?</div>
+      <div style="display:flex;flex-direction:column;gap:10px;margin-top:8px">
+        <button class="btn btn-primary" onclick="doGift('${girlId}',15,'🎁 Regalo especial');closeOverlay()" style="width:100%">🎁 Regalarle algo (15 PI → +20 amor)</button>
+        <button class="btn btn-ghost" onclick="currentChatGirl='${girlId}';closeOverlay();showSection('chat')" style="width:100%">💬 Escribirle un mensaje</button>
+        <button class="btn btn-ghost" onclick="closeOverlay()" style="width:100%">Pasar</button>
+      </div>
+    </div>
+  `);
 }
 
 function dismissNotif(e, id) {
   if (e) e.stopPropagation();
   state.notifications = state.notifications.filter(n => n.id != id);
   save();
-  showSection('tareas');
+  if (document.querySelector('.nav-btn.active')?.id === 'nav-tareas') showSection('tareas');
+}
+
+function doGift(girlId, cost, label) {
+  if (state.points < cost) { toast('No tienes suficientes PI', 'error', '⚠'); return; }
+  const g = state.girls.find(x => x.id === girlId);
+  state.points -= cost;
+  g.love = Math.min(100, g.love + 20);
+  g.status = getStatus(g.love);
+  save();
+  updateHeader();
+  toast(`${label} a ${g.name} 💜 +20 amor`, 'success', '🎁');
 }
 
 // ---- Girls ----
@@ -1544,16 +1682,17 @@ const tagColorList = ['purple','pink','cyan','gold','purple','pink'];
 function renderGirlCard(g) {
   const status = getStatus(g.love);
   const badgeClass = { cold:'badge-cold', warming:'badge-warming', hot:'badge-hot', max:'badge-max' }[status] || 'badge-unknown';
+  const rivalBadge = g.rival && g.rivalDeadline > Date.now() ? `<div style="position:absolute;top:10px;left:10px;background:rgba(248,113,113,0.85);color:white;font-size:10px;font-weight:700;padding:2px 7px;border-radius:5px">⚠ RIVAL</div>` : '';
+  const scheduledBadge = g.scheduledDate ? `<div style="position:absolute;bottom:10px;left:10px;background:rgba(192,132,252,0.85);color:white;font-size:10px;font-weight:700;padding:2px 7px;border-radius:5px">📅 Cita pendiente</div>` : '';
   return `
     <div class="girl-card" onclick="openGirlDetail('${g.id}')">
       <div class="girl-img-placeholder">${g.emoji || '💜'}</div>
       <div class="status-badge ${badgeClass}">${statusLabel(status)}</div>
+      ${rivalBadge}${scheduledBadge}
       <div class="girl-info">
         <div class="girl-name">${g.name}</div>
         <div class="girl-desc">${g.desc}</div>
-        <div class="tags">
-          ${g.tags.map((t,i) => `<span class="tag tag-${(g.tagColors||[])[i]||tagColorList[i%6]}">${t}</span>`).join('')}
-        </div>
+        <div class="tags">${g.tags.map((t,i) => `<span class="tag tag-${(g.tagColors||[])[i]||tagColorList[i%6]}">${t}</span>`).join('')}</div>
         <div class="love-bar-wrap">
           <div class="love-bar"><div class="love-bar-fill" style="width:${g.love}%"></div></div>
           <span>${g.love}%</span>
@@ -1564,7 +1703,7 @@ function renderGirlCard(g) {
 }
 
 function openAddGirl() {
-  const emojis = ['💜','🌸','✨','🌿','🦋','🌙','🔮','🌺','💎','🌟'];
+  const emojis = ['💜','🌸','✨','🌿','🦋','🌙','🔮','🌺','💎','🌟','🍓','🐾'];
   openOverlay(`
     <div class="modal">
       <button class="close-btn" onclick="closeOverlay()">×</button>
@@ -1576,10 +1715,8 @@ function openAddGirl() {
           <input class="form-input" id="gName" placeholder="Nombre...">
         </div>
         <div class="form-group">
-          <label class="form-label">Emoji / Avatar</label>
-          <select class="form-input" id="gEmoji">
-            ${emojis.map(e => `<option value="${e}">${e}</option>`).join('')}
-          </select>
+          <label class="form-label">Emoji</label>
+          <select class="form-input" id="gEmoji">${emojis.map(e => `<option value="${e}">${e}</option>`).join('')}</select>
         </div>
       </div>
       <div class="form-group">
@@ -1589,7 +1726,7 @@ function openAddGirl() {
       <div class="form-group">
         <label class="form-label">Etiquetas de personalidad</label>
         <div class="tag-input-wrap" id="tagWrap" onclick="document.getElementById('tagField').focus()">
-          <input class="tag-input-field" id="tagField" placeholder="Escribe y pulsa Enter...">
+          <input class="tag-input-field" id="tagField" placeholder="Escribe y Enter...">
         </div>
         <div style="font-size:11px;color:var(--text3);margin-top:4px">Ej: Tímida, Sarcástica, Aventurera, Romántica...</div>
       </div>
@@ -1601,24 +1738,22 @@ function openAddGirl() {
   `, (el) => {
     const field = el.querySelector('#tagField');
     const wrap = el.querySelector('#tagWrap');
-    const tags = [];
+    el._girlTags = [];
     field.addEventListener('keydown', e => {
       if ((e.key === 'Enter' || e.key === ',') && field.value.trim()) {
         e.preventDefault();
         const tag = field.value.trim().replace(',','');
-        if (!tags.includes(tag)) {
-          tags.push(tag);
+        if (!el._girlTags.includes(tag)) {
+          el._girlTags.push(tag);
           const span = document.createElement('span');
-          span.className = `removable-tag`;
-          span.innerHTML = `${tag} <span onclick="this.parentElement.remove();tags.splice(tags.indexOf('${tag}'),1)">×</span>`;
+          span.className = 'removable-tag';
+          span.dataset.tag = tag;
+          span.innerHTML = `${tag} <span onclick="this.parentElement.remove()">×</span>`;
           wrap.insertBefore(span, field);
         }
         field.value = '';
       }
     });
-    el.querySelector('#saveGirlTags')?._tags || (el._tags = tags);
-    el.id = 'modalOverlay';
-    el._girlTags = tags;
   });
 }
 
@@ -1628,24 +1763,17 @@ function saveGirl() {
   const desc = document.getElementById('gDesc').value.trim();
   const emoji = document.getElementById('gEmoji').value;
   const overlay = document.getElementById('modalOverlay');
-  const tags = overlay._girlTags || [];
-  const colors = tags.map((_,i) => tagColorList[i % tagColorList.length]);
-
-  // Also grab tags from DOM
   const tagEls = overlay.querySelectorAll('.removable-tag');
-  const domTags = Array.from(tagEls).map(el => el.textContent.replace('×','').trim());
-  const finalTags = domTags.length > 0 ? domTags : tags;
+  const finalTags = Array.from(tagEls).map(el => el.dataset.tag || el.textContent.replace('×','').trim()).filter(Boolean);
 
   state.girls.push({
     id: 'g' + (state.nextGirlId++),
     name, desc, emoji,
     tags: finalTags,
     tagColors: finalTags.map((_,i) => tagColorList[i % 6]),
-    love: 40,
-    status: 'warming',
-    chatHistory: [],
-    datesCount: 0,
-    birthday: null,
+    love: 40, status: 'warming',
+    chatHistory: [], datesCount: 0, birthday: null,
+    rival: false, rivalDeadline: null, scheduledDate: null,
   });
   save();
   closeOverlay();
@@ -1658,6 +1786,12 @@ function openGirlDetail(id) {
   if (!g) return;
   const status = getStatus(g.love);
   const badgeClass = { cold:'badge-cold', warming:'badge-warming', hot:'badge-hot', max:'badge-max' }[status] || 'badge-unknown';
+  const rivalInfo = g.rival && g.rivalDeadline > Date.now() ? `
+    <div style="margin-top:10px;padding:10px 12px;background:rgba(248,113,113,0.08);border:1px solid rgba(248,113,113,0.3);border-radius:10px;font-size:12px;color:var(--red)">
+      ⚠ <strong>Rival activo.</strong> Completa tareas para ganar puntos ×1.5. Cada tarea que completas la recupera un poco.
+      <div style="margin-top:4px;color:var(--text3)">Tiempo límite: ${new Date(g.rivalDeadline).toLocaleDateString('es-ES')}</div>
+    </div>
+  ` : '';
 
   openOverlay(`
     <div class="modal wide">
@@ -1667,30 +1801,77 @@ function openGirlDetail(id) {
         <div class="girl-detail-meta">
           <div class="girl-detail-name">${g.name}</div>
           <div class="girl-detail-desc">${g.desc}</div>
-          <div class="tags" style="margin-bottom:10px">
-            ${g.tags.map((t,i) => `<span class="tag tag-${(g.tagColors||[])[i]||'purple'}">${t}</span>`).join('')}
-          </div>
+          <div class="tags" style="margin-bottom:10px">${g.tags.map((t,i) => `<span class="tag tag-${(g.tagColors||[])[i]||'purple'}">${t}</span>`).join('')}</div>
           <div class="love-stat">
             <span style="font-size:12px;color:var(--text2)">Enamoramiento</span>
             <div class="love-stat-bar"><div class="love-stat-fill" style="width:${g.love}%"></div></div>
             <span class="love-stat-val">${g.love}%</span>
           </div>
-          <div style="font-size:12px;color:var(--text2);margin-bottom:6px">
-            Estado: <span class="status-badge ${badgeClass}" style="position:static;display:inline-block;margin-left:4px">${statusLabel(status)}</span>
-          </div>
-          <div style="font-size:12px;color:var(--text3)">🗓 ${g.datesCount || 0} citas • 💬 ${g.chatHistory.length} mensajes</div>
+          <div style="font-size:12px;color:var(--text2);margin-bottom:4px">Estado: <span class="status-badge ${badgeClass}" style="position:static;display:inline-block;margin-left:4px">${statusLabel(status)}</span></div>
+          <div style="font-size:12px;color:var(--text3)">🗓 ${g.datesCount || 0} citas • ${g.scheduledDate ? '📅 Cita agendada' : 'Sin cita pendiente'}</div>
+          ${rivalInfo}
         </div>
       </div>
       <div class="action-row">
         <button class="btn btn-primary btn-sm" onclick="closeOverlay();openChatWith('${g.id}')">💬 Chat</button>
-        <button class="btn btn-ghost btn-sm" onclick="closeOverlay();openDateWith('${g.id}')">🌸 Cita</button>
-        <button class="btn btn-ghost btn-sm" onclick="openInvest('${g.id}')">✦ Invertir PI</button>
+        <button class="btn btn-ghost btn-sm" onclick="closeOverlay();openDateWith('${g.id}')">🌸 Cita ya</button>
+        <button class="btn btn-ghost btn-sm" onclick="openScheduleDate('${g.id}')">📅 Agendar cita</button>
+        <button class="btn btn-ghost btn-sm" onclick="openInvest('${g.id}')">✦ Invertir</button>
+        <button class="btn btn-ghost btn-sm" onclick="closeOverlay();showSection('tienda')">🛍 Tienda</button>
         <button class="btn btn-danger btn-sm" onclick="removeGirl('${g.id}')">Eliminar</button>
       </div>
-      ${g.love <= 10 && g.love > 0 ? `<div style="margin-top:14px;padding:12px;background:rgba(248,113,113,0.08);border:1px solid rgba(248,113,113,0.2);border-radius:10px;font-size:13px;color:var(--red)">⚠ ${g.name} se está enfriando. ¡Invierte en ella o tendrás que reconquistarla desde cero!</div>` : ''}
       ${g.love >= 100 ? `<div style="margin-top:14px;padding:12px;background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.3);border-radius:10px;font-size:13px;color:var(--gold)">🌟 ¡Has conquistado a ${g.name}! Habéis desbloqueado un vínculo especial.</div>` : ''}
+      ${g.love <= 10 && g.love > 0 ? `<div style="margin-top:14px;padding:12px;background:rgba(248,113,113,0.08);border:1px solid rgba(248,113,113,0.2);border-radius:10px;font-size:13px;color:var(--red)">⚠ ${g.name} se está enfriando. ¡Invierte en ella o tendrás que reconquistarla!</div>` : ''}
     </div>
   `);
+}
+
+function openScheduleDate(girlId) {
+  const g = state.girls.find(x => x.id === girlId);
+  if (!g) return;
+  closeOverlay();
+  openOverlay(`
+    <div class="modal">
+      <button class="close-btn" onclick="closeOverlay()">×</button>
+      <div class="modal-title">📅 Agendar cita con ${g.name}</div>
+      <div class="modal-sub">Elige cuándo queréis salir y a dónde.</div>
+      <div class="form-group">
+        <label class="form-label">Fecha y hora</label>
+        <input class="form-input" id="schedDate" type="datetime-local">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Lugar</label>
+        <select class="form-input" id="schedPlace">
+          <option value="Café">☕ Café</option>
+          <option value="Restaurante">🍷 Restaurante</option>
+          <option value="Cine">🎬 Cine</option>
+          <option value="Parque">🌿 Parque</option>
+          <option value="Playa">🏖 Playa</option>
+          <option value="Concierto">🎵 Concierto</option>
+          <option value="Museo">🏛 Museo</option>
+          <option value="Escapada de fin de semana">🗺️ Escapada</option>
+          <option value="Galería de arte">🎨 Galería de arte</option>
+          <option value="Karaoke">🎤 Karaoke</option>
+        </select>
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button class="btn btn-ghost" onclick="closeOverlay()">Cancelar</button>
+        <button class="btn btn-primary" onclick="confirmScheduleDate('${girlId}')">Agendar 📅</button>
+      </div>
+    </div>
+  `);
+}
+
+function confirmScheduleDate(girlId) {
+  const dateVal = document.getElementById('schedDate').value;
+  const place = document.getElementById('schedPlace').value;
+  if (!dateVal) { toast('Elige una fecha', 'error', '⚠'); return; }
+  const g = state.girls.find(x => x.id === girlId);
+  g.scheduledDate = { date: dateVal, place };
+  save();
+  closeOverlay();
+  toast(`Cita con ${g.name} agendada en ${place} 📅`, 'success', '🗓');
+  showSection('chicas');
 }
 
 function removeGirl(id) {
@@ -1710,16 +1891,15 @@ function openInvest(id) {
     <div class="modal">
       <button class="close-btn" onclick="closeOverlay()">×</button>
       <div class="modal-title">Invertir en ${g.name}</div>
-      <div class="modal-sub">Tus puntos PI son atención y detalle. Cada inversión sube su enamoramiento.</div>
+      <div class="modal-sub">Cada inversión sube su enamoramiento. Tienes <strong style="color:var(--accent)">${state.points} PI</strong>.</div>
       <div class="invest-options">
         ${opts.map(v => `
-          <div class="invest-opt" onclick="doInvest('${id}',${v},this)">
+          <div class="invest-opt" onclick="doInvest('${id}',${v})">
             <div class="amount">${v} PI</div>
             <div class="gain">+${Math.round(v/3)} amor</div>
           </div>
         `).join('')}
       </div>
-      <div style="font-size:12px;color:var(--text3);margin-bottom:16px">Tienes <strong style="color:var(--accent)">${state.points} PI</strong> disponibles.</div>
       <div style="display:flex;justify-content:flex-end">
         <button class="btn btn-ghost" onclick="closeOverlay()">Cancelar</button>
       </div>
@@ -1727,7 +1907,7 @@ function openInvest(id) {
   `);
 }
 
-function doInvest(id, amount, el) {
+function doInvest(id, amount) {
   if (state.points < amount) { toast('No tienes suficientes PI', 'error', '⚠'); return; }
   const g = state.girls.find(x => x.id === id);
   const gain = Math.round(amount / 3);
@@ -1741,14 +1921,158 @@ function doInvest(id, amount, el) {
   showSection('chicas');
 }
 
-// ---- Dates ----
+// ---- Shop / Tienda ----
+const SHOP_ITEMS = [
+  { id: 'perfume', icon: '🌸', name: 'Perfume de lujo', desc: 'Antes de una cita: +10% amor extra durante toda la cita.', cost: 30, type: 'buff_date', bonus: 10 },
+  { id: 'ropa', icon: '👔', name: 'Outfit elegante', desc: 'Aspecto +15 puntos de aspiración permanentes.', cost: 50, type: 'aspiration', bonus: 15 },
+  { id: 'flores', icon: '💐', name: 'Ramo de flores', desc: 'Regalo a una chica: +15 amor instantáneo.', cost: 25, type: 'gift_love', bonus: 15 },
+  { id: 'chocolate', icon: '🍫', name: 'Caja de bombones', desc: 'Regalo dulce: +8 amor y su humor mejora.', cost: 15, type: 'gift_love', bonus: 8 },
+  { id: 'libro', icon: '📚', name: 'Libro de conversación', desc: 'Próximas 5 mensajes de chat cuestan 0 PI.', cost: 35, type: 'chat_free', bonus: 5 },
+  { id: 'joya', icon: '💍', name: 'Joya especial', desc: 'Regalo premium: +25 amor y reduce rivales.', cost: 80, type: 'gift_love', bonus: 25 },
+  { id: 'spa', icon: '🛁', name: 'Sesión de spa', desc: 'Tu aspiración sube +20 y das mejor imagen.', cost: 45, type: 'aspiration', bonus: 20 },
+  { id: 'cena_sorpresa', icon: '🥂', name: 'Cena sorpresa', desc: 'Organiza una cena íntima sin coste de PI.', cost: 60, type: 'free_date', bonus: 0 },
+];
+
+function renderTienda(c) {
+  const inv = state.inventory || [];
+  c.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
+      <div class="section-title" style="margin-bottom:0">Tienda de encanto</div>
+      <div style="display:flex;gap:12px;align-items:center">
+        <div class="streak-badge">🪙 ${state.coins} monedas</div>
+        ${inv.length > 0 ? `<button class="btn btn-ghost btn-sm" onclick="openInventory()">🎒 Inventario (${inv.length})</button>` : ''}
+      </div>
+    </div>
+    <div class="dates-grid">
+      ${SHOP_ITEMS.map(item => `
+        <div class="activity-card" onclick="buyItem('${item.id}')">
+          <div class="activity-icon">${item.icon}</div>
+          <div class="activity-name">${item.name}</div>
+          <div class="activity-desc">${item.desc}</div>
+          <div class="activity-cost">
+            <span class="cost-tag" style="color:var(--gold);background:rgba(251,191,36,0.1)">🪙 ${item.cost}</span>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function buyItem(id) {
+  const item = SHOP_ITEMS.find(x => x.id === id);
+  if (!item) return;
+  if (state.coins < item.cost) { toast('No tienes suficientes monedas 🪙', 'error', '⚠'); return; }
+
+  // If it's a gift or buff, ask who to use on
+  if (['gift_love', 'buff_date', 'free_date'].includes(item.type)) {
+    if (state.girls.length === 0) { toast('No tienes chicas todavía', 'error', '⚠'); return; }
+    const girlOpts = state.girls.map(g => `<option value="${g.id}">${g.emoji} ${g.name}</option>`).join('');
+    openOverlay(`
+      <div class="modal">
+        <button class="close-btn" onclick="closeOverlay()">×</button>
+        <div class="modal-title">${item.icon} ${item.name}</div>
+        <div class="modal-sub">${item.desc}</div>
+        <div class="form-group">
+          <label class="form-label">¿Para quién?</label>
+          <select class="form-input" id="itemGirl">${girlOpts}</select>
+        </div>
+        <div style="display:flex;gap:8px;justify-content:flex-end">
+          <button class="btn btn-ghost" onclick="closeOverlay()">Cancelar</button>
+          <button class="btn btn-primary" onclick="useItem('${id}', document.getElementById('itemGirl').value)">Usar ${item.icon}</button>
+        </div>
+      </div>
+    `);
+  } else {
+    useItem(id, null);
+  }
+}
+
+function useItem(id, girlId) {
+  const item = SHOP_ITEMS.find(x => x.id === id);
+  if (!item) return;
+  if (state.coins < item.cost) { toast('No tienes suficientes monedas', 'error', '⚠'); return; }
+  state.coins -= item.cost;
+
+  if (item.type === 'gift_love' && girlId) {
+    const g = state.girls.find(x => x.id === girlId);
+    if (g) {
+      g.love = Math.min(100, g.love + item.bonus);
+      g.status = getStatus(g.love);
+      if (item.id === 'joya' && g.rival) { g.rival = false; toast('¡El rival se retiró! 💪', 'success', '⭐'); }
+      toast(`${item.icon} Regalado a ${g.name} — +${item.bonus} amor`, 'success', '💜');
+    }
+  } else if (item.type === 'aspiration') {
+    state.aspiration = Math.min(100, (state.aspiration || 50) + item.bonus);
+    toast(`${item.icon} +${item.bonus} aspiración`, 'success', '⭐');
+  } else if (item.type === 'chat_free') {
+    state.freeChatMessages = (state.freeChatMessages || 0) + item.bonus;
+    toast(`${item.icon} Próximos ${item.bonus} mensajes gratis`, 'success', '💬');
+  } else if (item.type === 'buff_date' && girlId) {
+    state.dateBuff = { girlId, bonus: item.bonus };
+    toast(`${item.icon} Buff activo para la próxima cita con ${state.girls.find(x=>x.id===girlId)?.name}`, 'success', '✨');
+  } else if (item.type === 'free_date' && girlId) {
+    state.inventory = state.inventory || [];
+    state.inventory.push({ id, girlId, label: `${item.icon} ${item.name}` });
+    toast(`${item.icon} Guardado en tu inventario`, 'success', '🎒');
+    closeOverlay();
+    save();
+    updateHeader();
+    showSection('tienda');
+    return;
+  }
+
+  save();
+  updateHeader();
+  closeOverlay();
+  showSection('tienda');
+}
+
+function openInventory() {
+  const inv = state.inventory || [];
+  openOverlay(`
+    <div class="modal">
+      <button class="close-btn" onclick="closeOverlay()">×</button>
+      <div class="modal-title">🎒 Inventario</div>
+      <div class="modal-sub">Items que puedes usar cuando quieras.</div>
+      ${inv.length === 0 ? '<div style="color:var(--text3);text-align:center;padding:20px">Vacío</div>' : ''}
+      ${inv.map((it, i) => {
+        const g = state.girls.find(x => x.id === it.girlId);
+        return `
+          <div style="display:flex;align-items:center;gap:12px;padding:12px;background:var(--surface2);border-radius:10px;margin-bottom:8px">
+            <span style="font-size:20px">${it.label.split(' ')[0]}</span>
+            <div style="flex:1"><div style="font-weight:500">${it.label}</div><div style="font-size:12px;color:var(--text2)">Para: ${g ? g.name : 'alguien'}</div></div>
+            <button class="btn btn-primary btn-sm" onclick="useInventoryItem(${i})">Usar</button>
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `);
+}
+
+function useInventoryItem(idx) {
+  const item = state.inventory[idx];
+  if (!item) return;
+  state.inventory.splice(idx, 1);
+  // Trigger a free date
+  closeOverlay();
+  openDateWith(item.girlId, true);
+  save();
+}
+
+// ---- Dates / Citas ----
 const ACTIVITIES = [
-  { id: 'cafe', icon: '☕', name: 'Café tranquilo', desc: 'Una tarde de charlas y café. Simple pero íntimo.', cost: 20, depth: 1, type: 'cafe' },
-  { id: 'dinner', icon: '🍷', name: 'Cena especial', desc: 'Un restaurante con buena música y mejor compañía.', cost: 45, depth: 2, type: 'dinner' },
-  { id: 'walk', icon: '🌙', name: 'Paseo nocturno', desc: 'Caminar sin rumbo bajo las estrellas.', cost: 15, depth: 1, type: 'walk' },
-  { id: 'movie', icon: '🎬', name: 'Noche de peli', desc: 'Palomitas, manta, y elegir qué ver (lo difícil).', cost: 25, depth: 2, type: 'movie' },
-  { id: 'trip', icon: '🗺️', name: 'Escapada improvisada', desc: 'Coger el coche sin destino. Puede pasar de todo.', cost: 80, depth: 3, type: 'trip' },
-  { id: 'concert', icon: '🎵', name: 'Concierto en vivo', desc: 'Música, luces y esa sensación de compartir algo grande.', cost: 55, depth: 2, type: 'concert' },
+  { id: 'cafe', icon: '☕', name: 'Café tranquilo', desc: 'Charlas íntimas sobre libros y vida.', cost: 20, depth: 1, type: 'cafe', location: 'Cafetería del centro' },
+  { id: 'dinner', icon: '🍷', name: 'Cena especial', desc: 'Un restaurante con música y luces suaves.', cost: 45, depth: 2, type: 'dinner', location: 'Restaurante La Piazza' },
+  { id: 'walk', icon: '🌙', name: 'Paseo nocturno', desc: 'Caminar sin rumbo bajo las estrellas.', cost: 15, depth: 1, type: 'walk', location: 'Paseo del Río' },
+  { id: 'movie', icon: '🎬', name: 'Noche de peli', desc: 'Palomitas, manta y elegir qué ver.', cost: 25, depth: 2, type: 'movie', location: 'En casa' },
+  { id: 'trip', icon: '🗺️', name: 'Escapada improvisada', desc: 'Coche sin destino. Puede pasar cualquier cosa.', cost: 80, depth: 3, type: 'trip', location: 'Carretera libre' },
+  { id: 'concert', icon: '🎵', name: 'Concierto en vivo', desc: 'Música, luces y algo que siempre recordaréis.', cost: 55, depth: 2, type: 'concert', location: 'Sala Apolo' },
+  { id: 'beach', icon: '🏖', name: 'Playa al atardecer', desc: 'Arena, olas y el sol cayendo despacio.', cost: 30, depth: 2, type: 'walk', location: 'Playa de la Barceloneta' },
+  { id: 'museum', icon: '🏛', name: 'Museo y arte', desc: 'Explorar exposiciones, hablar de lo que os inspira.', cost: 25, depth: 2, type: 'cafe', location: 'MNAC o similar' },
+  { id: 'karaoke', icon: '🎤', name: 'Karaoke', desc: 'Vergüenza y risas garantizadas.', cost: 35, depth: 2, type: 'movie', location: 'Karaoke Bar' },
+  { id: 'brunch', icon: '🥞', name: 'Brunch de domingo', desc: 'Tranquilidad, zumo y hablar sin prisa.', cost: 20, depth: 1, type: 'cafe', location: 'Café con encanto' },
+  { id: 'rooftop', icon: '🌆', name: 'Rooftop de noche', desc: 'Vistas de la ciudad, cocteles y silencio cómodo.', cost: 60, depth: 3, type: 'dinner', location: 'Terraza Hotel Arts' },
+  { id: 'picnic', icon: '🧺', name: 'Picnic en el parque', desc: 'Comida casera, hierba y el sol de la tarde.', cost: 20, depth: 1, type: 'walk', location: 'Parque de la Ciutadella' },
 ];
 
 function renderCitas(c) {
@@ -1757,19 +2081,37 @@ function renderCitas(c) {
     return;
   }
 
+  // Show scheduled dates
+  const scheduled = state.girls.filter(g => g.scheduledDate);
+  const scheduledHtml = scheduled.length > 0 ? `
+    <div class="section-title" style="margin-bottom:12px">Citas Agendadas</div>
+    <div style="margin-bottom:24px;display:flex;flex-direction:column;gap:8px">
+      ${scheduled.map(g => `
+        <div style="background:var(--surface);border:1px solid rgba(192,132,252,0.3);border-radius:12px;padding:14px 16px;display:flex;align-items:center;gap:12px;cursor:pointer" onclick="startScheduledDate('${g.id}')">
+          <span style="font-size:22px">${g.emoji}</span>
+          <div style="flex:1">
+            <div style="font-weight:600">${g.name}</div>
+            <div style="font-size:12px;color:var(--text2)">📍 ${g.scheduledDate.place} · ${new Date(g.scheduledDate.date).toLocaleDateString('es-ES',{weekday:'short',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}</div>
+          </div>
+          <button class="btn btn-primary btn-sm">Empezar</button>
+        </div>
+      `).join('')}
+    </div>
+  ` : '';
+
   c.innerHTML = `
-    <div class="section-title">Actividades para la cita</div>
+    ${scheduledHtml}
+    <div class="section-title">Elegir actividad</div>
     <div class="dates-grid">
       ${ACTIVITIES.map(a => `
         <div class="activity-card ${a.type}" onclick="openDateModal('${a.id}')">
           <div class="activity-icon">${a.icon}</div>
           <div class="activity-name">${a.name}</div>
           <div class="activity-desc">${a.desc}</div>
+          <div style="font-size:11px;color:var(--text3);margin-bottom:8px">📍 ${a.location}</div>
           <div class="activity-cost">
             <span class="cost-tag">✦ ${a.cost} PI</span>
-            <div class="difficulty-dots">
-              ${[1,2,3].map(i => `<div class="dot ${i <= a.depth ? 'active' : ''}"></div>`).join('')}
-            </div>
+            <div class="difficulty-dots">${[1,2,3].map(i => `<div class="dot ${i <= a.depth ? 'active' : ''}"></div>`).join('')}</div>
           </div>
         </div>
       `).join('')}
@@ -1777,253 +2119,338 @@ function renderCitas(c) {
   `;
 }
 
+function startScheduledDate(girlId) {
+  const g = state.girls.find(x => x.id === girlId);
+  if (!g || !g.scheduledDate) return;
+  const place = g.scheduledDate.place;
+  // Find matching activity or closest
+  const act = ACTIVITIES.find(a => a.location.includes(place.split(' ')[0])) || ACTIVITIES[Math.floor(Math.random() * 6)];
+  g.scheduledDate = null;
+  save();
+  runDateConversation(act, g, true);
+}
+
 function openDateModal(actId) {
   const act = ACTIVITIES.find(a => a.id === actId);
   if (!act) return;
-  const girlOpts = state.girls.map(g => `<option value="${g.id}">${g.name} (${g.love}% amor)</option>`).join('');
-
+  const girlOpts = state.girls.map(g => `<option value="${g.id}">${g.emoji} ${g.name} (${g.love}% amor)</option>`).join('');
   openOverlay(`
     <div class="modal wide">
       <button class="close-btn" onclick="closeOverlay()">×</button>
       <div class="modal-title">${act.icon} ${act.name}</div>
-      <div class="modal-sub">${act.desc} — Coste: <strong style="color:var(--accent)">✦ ${act.cost} PI</strong></div>
+      <div class="modal-sub">${act.desc} · 📍 ${act.location}</div>
       <div class="form-group">
         <label class="form-label">¿Con quién?</label>
         <select class="form-input" id="dateGirl">${girlOpts}</select>
       </div>
-      <div id="dateScene">
-        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">
-          <button class="btn btn-ghost" onclick="closeOverlay()">Cancelar</button>
-          <button class="btn btn-primary" onclick="startDate('${actId}')">Empezar cita ✨</button>
-        </div>
+      <div style="font-size:12px;color:var(--text3);margin-bottom:16px">Coste: <strong style="color:var(--accent)">✦ ${act.cost} PI</strong> · Tienes ${state.points} PI</div>
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button class="btn btn-ghost" onclick="closeOverlay()">Cancelar</button>
+        <button class="btn btn-primary" onclick="startDate('${actId}')">Empezar cita ✨</button>
       </div>
     </div>
   `);
 }
 
-function openDateWith(girlId) {
-  showSection('citas');
-  setTimeout(() => {
-    const c = document.getElementById('content');
-    // Pre-select girl
-    openOverlay(`
-      <div class="modal wide">
-        <button class="close-btn" onclick="closeOverlay()">×</button>
-        <div class="modal-title">Elegir actividad</div>
-        <div class="modal-sub">¿Qué hacéis hoy?</div>
-        <div class="dates-grid" style="gap:10px;margin-bottom:16px">
-          ${ACTIVITIES.map(a => `
-            <div class="activity-card ${a.type}" onclick="startDate('${a.id}','${girlId}',this)" style="padding:14px">
-              <div class="activity-icon" style="font-size:22px;margin-bottom:8px">${a.icon}</div>
-              <div class="activity-name" style="font-size:13px">${a.name}</div>
-              <div class="cost-tag" style="font-size:11px;margin-top:6px;display:inline-block">✦ ${a.cost}</div>
-            </div>
-          `).join('')}
-        </div>
+function openDateWith(girlId, free = false) {
+  closeOverlay();
+  openOverlay(`
+    <div class="modal wide">
+      <button class="close-btn" onclick="closeOverlay()">×</button>
+      <div class="modal-title">Elegir actividad</div>
+      <div class="modal-sub">¿Qué hacéis hoy? ${free ? '<span style="color:var(--green)">✓ Cita gratis</span>' : ''}</div>
+      <div class="dates-grid" style="gap:10px;margin-bottom:16px">
+        ${ACTIVITIES.map(a => `
+          <div class="activity-card ${a.type}" onclick="startDate('${a.id}','${girlId}',null,${free})" style="padding:14px">
+            <div class="activity-icon" style="font-size:22px;margin-bottom:6px">${a.icon}</div>
+            <div class="activity-name" style="font-size:13px">${a.name}</div>
+            <div style="font-size:10px;color:var(--text3)">📍${a.location}</div>
+            ${free ? '' : `<div class="cost-tag" style="font-size:11px;margin-top:6px;display:inline-block">✦ ${a.cost}</div>`}
+          </div>
+        `).join('')}
       </div>
-    `);
-  }, 100);
+    </div>
+  `);
 }
 
-async function startDate(actId, preGirlId, el) {
+async function startDate(actId, preGirlId, el, free=false) {
   const act = ACTIVITIES.find(a => a.id === actId);
   const girlEl = document.getElementById('dateGirl');
   const girlId = preGirlId || (girlEl ? girlEl.value : state.girls[0]?.id);
   const g = state.girls.find(x => x.id === girlId);
-  if (!g) return;
+  if (!g || !act) return;
 
-  if (state.points < act.cost) {
-    toast(`No tienes suficientes PI (necesitas ${act.cost})`, 'error', '⚠');
+  if (!free && state.points < act.cost) {
+    toast(`Necesitas ${act.cost} PI`, 'error', '⚠');
     return;
   }
 
-  state.points -= act.cost;
-  save();
-  updateHeader();
+  if (!free) {
+    state.points -= act.cost;
+    save();
+    updateHeader();
+  }
 
-  // Build scene UI
-  const modal = document.querySelector('.modal.wide') || document.querySelector('.modal');
-  modal.innerHTML = `
-    <button class="close-btn" onclick="closeOverlay()">×</button>
-    <div class="modal-title">${act.icon} ${act.name} con ${g.name}</div>
-    <div class="modal-sub">La historia se desarrolla...</div>
-    <div class="scene-box" id="sceneText">
-      <div class="scene-loading"><div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div> Generando escena...</div>
+  closeOverlay();
+  runDateConversation(act, g);
+}
+
+// ---- Date Conversation (main feature) ----
+async function runDateConversation(act, g, fromSchedule = false) {
+  // Get buff if any
+  const hasBuff = state.dateBuff && state.dateBuff.girlId === g.id;
+  const buffBonus = hasBuff ? state.dateBuff.bonus : 0;
+  if (hasBuff) { state.dateBuff = null; save(); }
+
+  const dateCtx = {
+    act, girl: g,
+    messages: [], // conversation history in the date
+    loveChange: 0,
+    phase: 0, // 0=opening, 1..N=conversation, final=summary
+    buffBonus,
+    maxExchanges: act.depth === 1 ? 4 : act.depth === 2 ? 6 : 8,
+  };
+
+  openOverlay(`
+    <div class="modal wide" id="dateModal">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
+        <span style="font-size:28px">${g.emoji}</span>
+        <div>
+          <div style="font-weight:700;font-size:16px">${act.icon} ${act.name} con ${g.name}</div>
+          <div style="font-size:12px;color:var(--text2)">📍 ${act.location} ${hasBuff ? '· ✨ Buff activo' : ''}</div>
+        </div>
+        <div style="margin-left:auto">
+          <div id="dateLoveIndicator" style="font-size:12px;color:var(--accent)">❤️ ${g.love}%</div>
+          <div id="dateProgress" style="font-size:11px;color:var(--text3)">Inicio</div>
+        </div>
+      </div>
+      <div id="dateChatMessages" class="chat-messages" style="height:300px;background:var(--surface2);border-radius:12px;border:1px solid var(--border);margin-bottom:12px;padding:14px"></div>
+      <div id="dateChatInput" style="display:flex;gap:8px">
+        <input class="chat-input" id="dateInput" placeholder="Respóndele..." onkeydown="if(event.key==='Enter')sendDateMessage()" style="flex:1">
+        <button class="chat-send" id="dateSendBtn" onclick="sendDateMessage()">➤</button>
+      </div>
+      <div id="dateSummary" style="display:none"></div>
     </div>
-    <div id="sceneChoices"></div>
-    <div id="sceneSummary" style="display:none">
-      <div class="section-title" style="margin-bottom:12px">Resumen de la cita</div>
-      <div id="summaryRows"></div>
-      <div style="display:flex;justify-content:flex-end;margin-top:16px">
+  `);
+
+  // Start the date with AI opening
+  await initDateConversation(dateCtx);
+}
+
+async function initDateConversation(ctx) {
+  const {act, girl} = ctx;
+  const sys = buildDateSystem(ctx);
+
+  appendDateMsg('her', null, true); // typing
+  try {
+    const reply = await callGroq([
+      {role:'system', content: sys},
+      {role:'user', content: `Empieza la escena de ${act.name} en ${act.location}. Describe brevemente el ambiente y di algo como ${girl.name} para abrir la conversación.`}
+    ], 300);
+    removeTyping();
+    appendDateMsg('her', reply);
+    ctx.messages.push({role:'assistant', content: reply});
+    ctx.phase++;
+    updateDateProgress(ctx);
+  } catch(e) {
+    removeTyping();
+    appendDateMsg('system', 'Error al conectar. Inténtalo de nuevo.');
+  }
+}
+
+function buildDateSystem(ctx) {
+  const {act, girl} = ctx;
+  return `Eres ${girl.name} en una cita romántica (${act.name}) en ${act.location}.
+Tu personalidad: ${girl.tags.join(', ')}. ${girl.desc}
+Tu nivel de enamoramiento: ${girl.love}%. ${girl.love < 30 ? 'Estás un poco fría, reservada.' : girl.love > 70 ? 'Estás muy enamorada, emocionada.' : 'Estás cómoda pero con ligera reserva.'}
+${ctx.buffBonus > 0 ? 'Hoy te sientes especialmente bien y eres más receptiva.' : ''}
+REGLAS:
+- Responde como ${girl.name} de forma natural, máx 3 frases.
+- Muestra tu personalidad real: si eres sarcástica, usa ironía sutil. Si eres tímida, duda un poco.
+- No des opciones de respuesta. Solo habla como ella.
+- En español. Nada de asteriscos ni acciones entre corchetes.
+- Evalúa internamente si la respuesta del jugador fue buena, neutral o mala para ti según tu personalidad.
+Al final de cada respuesta tuya, añade una línea oculta en este formato exacto:
+[EVAL:+8] para buena, [EVAL:0] para neutral, [EVAL:-6] para mala. Ajusta el número entre -15 y +15.`;
+}
+
+async function sendDateMessage() {
+  const input = document.getElementById('dateInput');
+  if (!input) return;
+  const msg = input.value.trim();
+  if (!msg) return;
+
+  // Get dateCtx from closure — stored on the modal element
+  const modal = document.getElementById('dateModal');
+  if (!modal || !modal._ctx) return;
+  const ctx = modal._ctx;
+
+  input.value = '';
+  input.disabled = true;
+  document.getElementById('dateSendBtn').disabled = true;
+
+  appendDateMsg('user', msg);
+  ctx.messages.push({role:'user', content: msg});
+
+  appendDateMsg('her', null, true);
+  try {
+    const messages = [
+      {role:'system', content: buildDateSystem(ctx)},
+      ...ctx.messages
+    ];
+    const reply = await callGroq(messages, 280);
+    removeTyping();
+
+    // Parse eval
+    const evalMatch = reply.match(/\[EVAL:([+-]?\d+)\]/);
+    const evalVal = evalMatch ? parseInt(evalMatch[1]) : 0;
+    const cleanReply = reply.replace(/\[EVAL:[+-]?\d+\]/g, '').trim();
+
+    // Apply buff
+    const finalEval = evalVal + (ctx.buffBonus > 0 ? Math.ceil(ctx.buffBonus * 0.3) : 0);
+    ctx.loveChange += finalEval;
+    ctx.girl.love = Math.max(0, Math.min(100, ctx.girl.love + finalEval));
+
+    if (evalVal > 5) toast(`💜 Le gustó tu respuesta`, 'success', '🌸');
+    else if (evalVal < -4) toast(`💔 No le gustó mucho`, 'error', '⚠');
+
+    appendDateMsg('her', cleanReply);
+    ctx.messages.push({role:'assistant', content: cleanReply});
+    ctx.phase++;
+    updateDateProgress(ctx);
+
+    // Update love indicator
+    const li = document.getElementById('dateLoveIndicator');
+    if (li) li.textContent = `❤️ ${ctx.girl.love}%`;
+
+    save();
+
+    // Check if date should end
+    if (ctx.phase >= ctx.maxExchanges) {
+      setTimeout(() => endDate(ctx), 600);
+    } else {
+      input.disabled = false;
+      document.getElementById('dateSendBtn').disabled = false;
+      input.focus();
+    }
+  } catch(e) {
+    removeTyping();
+    input.disabled = false;
+    document.getElementById('dateSendBtn').disabled = false;
+    toast('Error de conexión', 'error', '⚠');
+  }
+}
+
+function appendDateMsg(role, text, typing = false) {
+  const msgs = document.getElementById('dateChatMessages');
+  if (!msgs) return;
+  const div = document.createElement('div');
+  div.className = `msg ${role === 'user' ? 'user' : role === 'her' ? 'her' : ''}`;
+  if (typing) {
+    div.id = 'dateTyping';
+    div.innerHTML = `<div class="typing-indicator"><div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div></div>`;
+  } else if (role === 'system') {
+    div.style.cssText = 'text-align:center;color:var(--text3);font-size:12px;width:100%';
+    div.textContent = text;
+  } else {
+    div.innerHTML = `<div class="msg-bubble">${text.replace(/\n/g,'<br>')}</div>`;
+  }
+  msgs.appendChild(div);
+  msgs.scrollTop = msgs.scrollHeight;
+}
+
+function removeTyping() {
+  const el = document.getElementById('dateTyping');
+  if (el) el.remove();
+}
+
+function updateDateProgress(ctx) {
+  const el = document.getElementById('dateProgress');
+  if (el) el.textContent = `${ctx.phase}/${ctx.maxExchanges} momentos`;
+}
+
+function endDate(ctx) {
+  const {girl, loveChange, act} = ctx;
+  girl.datesCount = (girl.datesCount || 0) + 1;
+  girl.status = getStatus(girl.love);
+  state.aspiration = Math.min(100, (state.aspiration || 50) + 2);
+  save();
+
+  // Check bad end: rival takes over
+  if (loveChange < -10) {
+    // She might start seeing someone else
+    girl.rival = true;
+    girl.rivalDeadline = Date.now() + 72 * 60 * 60 * 1000;
+  }
+
+  const summaryEl = document.getElementById('dateSummary');
+  const inputEl = document.getElementById('dateChatInput');
+  if (inputEl) inputEl.style.display = 'none';
+  if (!summaryEl) return;
+
+  const feel = loveChange > 12 ? '¡Fue una cita increíble! 💜' : loveChange > 4 ? 'Fue un buen momento 🌸' : loveChange < -8 ? 'No salió bien... Puede haber consecuencias.' : 'Estuvo bien, aunque con tensión.';
+
+  summaryEl.style.display = 'block';
+  summaryEl.innerHTML = `
+    <div style="border-top:1px solid var(--border);padding-top:16px;margin-top:8px">
+      <div class="section-title" style="margin-bottom:12px">Fin de la cita</div>
+      <div class="summary-row"><span>Cómo fue</span><em style="color:var(--text2)">${feel}</em></div>
+      <div class="summary-row"><span>Cambio amor</span><span class="love-change ${loveChange > 0 ? 'positive' : loveChange < 0 ? 'negative' : 'neutral'}">${loveChange > 0 ? '+' : ''}${loveChange}%</span></div>
+      <div class="summary-row"><span>Amor total</span><span style="color:var(--accent);font-weight:700">${girl.love}%</span></div>
+      ${loveChange < -10 ? `<div style="margin-top:8px;padding:10px;background:rgba(248,113,113,0.08);border:1px solid rgba(248,113,113,0.2);border-radius:8px;font-size:12px;color:var(--red)">⚠ La cita fue mal. ${girl.name} está considerando salir con otra persona. ¡Actúa rápido!</div>` : ''}
+      <div style="display:flex;justify-content:flex-end;margin-top:12px;gap:8px">
+        <button class="btn btn-ghost btn-sm" onclick="currentChatGirl='${girl.id}';closeOverlay();showSection('chat')">💬 Escríbele</button>
         <button class="btn btn-primary" onclick="closeOverlay();showSection('chicas')">Terminar 💜</button>
       </div>
     </div>
   `;
-
-  // AI scene
-  const context = {act, girl: g, phase: 1, loveChange: 0};
-  await runDatePhase(context, 1);
 }
 
-async function callGroq(messages, max_tokens=400) {
-  const res = await fetch(GROQ_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GROQ_KEY}` },
-    body: JSON.stringify({
-      model: 'llama-3.1-8b-instant',
-      max_tokens,
-      temperature: 0.85,
-      messages
-    })
-  });
-  const d = await res.json();
-  return d.choices?.[0]?.message?.content || '';
-}
-
-async function runDatePhase(context, phase) {
-  const {act, girl} = context;
-  const sys = `Eres el narrador de un juego romántico visual novel en español. Tu trabajo es crear escenas cortas e inmersivas de citas entre el jugador y ${girl.name}.
-Personalidad de ${girl.name}: ${girl.tags.join(', ')}. Descripción: ${girl.desc}.
-Actividad: ${act.name}. ${act.desc}.
-Fase ${phase} de 3.
-Escribe 3-4 frases de narrativa atmosférica de la cita. Incluye diálogo de ${girl.name} que refleje SU personalidad única. Luego escribe exactamente 3 opciones de respuesta del jugador en JSON al final con este formato exacto:
-CHOICES:{"a":"texto opción A","b":"texto opción B","c":"texto opción C","effect":{"a":8,"b":-5,"c":2}}
-Las opciones deben ser relevantes a su personalidad. effect es el cambio de enamoramiento para cada opción (puede ser negativo).`;
-
-  const userMsg = phase === 1
-    ? `Empieza la escena de ${act.name} con ${girl.name}.`
-    : `Continúa la escena, fase ${phase}. El jugador eligió antes: "${context.lastChoice}". Enamoramiento actual: ${girl.love}%.`;
-
-  const sceneEl = document.getElementById('sceneText');
-  const choicesEl = document.getElementById('sceneChoices');
-  if (!sceneEl) return;
-
-  sceneEl.innerHTML = `<div class="scene-loading"><div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div> ${girl.name} está aquí contigo...</div>`;
-
-  try {
-    const reply = await callGroq([
-      {role:'system', content:sys},
-      {role:'user', content:userMsg}
-    ]);
-
-    const splitIdx = reply.indexOf('CHOICES:');
-    const narrative = splitIdx > -1 ? reply.substring(0, splitIdx).trim() : reply.trim();
-    let choices = null;
-    if (splitIdx > -1) {
-      try { choices = JSON.parse(reply.substring(splitIdx + 8)); } catch(e) {}
-    }
-
-    sceneEl.innerHTML = narrative.replace(/\n/g, '<br>');
-    choicesEl.innerHTML = '';
-
-    if (choices && phase < 3) {
-      const list = document.createElement('div');
-      list.className = 'choice-list';
-      list.style.marginTop = '14px';
-      ['a','b','c'].forEach(k => {
-        if (!choices[k]) return;
-        const btn = document.createElement('button');
-        btn.className = 'choice-btn';
-        btn.textContent = choices[k];
-        btn.onclick = async () => {
-          const eff = choices.effect?.[k] || 0;
-          context.loveChange += eff;
-          context.lastChoice = choices[k];
-          // Apply partial effect
-          girl.love = Math.max(0, Math.min(100, girl.love + eff));
-          save();
-          choicesEl.querySelectorAll('.choice-btn').forEach(b => b.disabled = true);
-          if (eff > 0) toast(`+${eff} amor 💜`, 'success', '🌸');
-          else if (eff < 0) toast(`${eff} amor 💔`, 'error', '⚠');
-          else toast('Momento especial ✨', 'info', '✨');
-          await runDatePhase(context, phase + 1);
-        };
-        list.appendChild(btn);
-      });
-      choicesEl.appendChild(list);
-    } else if (phase >= 3) {
-      // Final phase - show summary after short delay
-      setTimeout(() => showDateSummary(context), 500);
-    }
-  } catch(e) {
-    sceneEl.innerHTML = `<em style="color:var(--text2)">Error generando escena. Comprueba tu conexión.</em>`;
-    console.error(e);
-  }
-}
-
-function showDateSummary(context) {
-  const {act, girl, loveChange} = context;
-  const summaryEl = document.getElementById('sceneSummary');
-  const rowsEl = document.getElementById('summaryRows');
-  const choicesEl = document.getElementById('sceneChoices');
-  if (!summaryEl || !rowsEl) return;
-
-  girl.datesCount = (girl.datesCount || 0) + 1;
-  girl.status = getStatus(girl.love);
-  save();
-
-  if (choicesEl) choicesEl.innerHTML = '';
-
-  const feel = loveChange > 10 ? 'Fue una cita perfecta 💜' : loveChange > 0 ? 'Fue un buen momento 🌸' : loveChange < -5 ? 'No fue como esperaba... 💔' : 'Estuvo bien, aunque con tensión';
-
-  rowsEl.innerHTML = `
-    <div class="summary-row"><span>Actividad</span><strong>${act.icon} ${act.name}</strong></div>
-    <div class="summary-row"><span>Cómo se sintió</span><em style="color:var(--text2)">${feel}</em></div>
-    <div class="summary-row"><span>Cambio de amor</span><span class="love-change ${loveChange > 0 ? 'positive' : loveChange < 0 ? 'negative' : 'neutral'}">${loveChange > 0 ? '+' : ''}${loveChange}%</span></div>
-    <div class="summary-row"><span>Amor total</span><span style="color:var(--accent);font-weight:700">${girl.love}%</span></div>
-  `;
-
-  summaryEl.style.display = 'block';
-}
+// Store ctx on modal after creation
+const _origRunDate = runDateConversation;
 
 // ---- Chat ----
 let currentChatGirl = null;
 
 function renderChat(c) {
   if (state.girls.length === 0) {
-    c.innerHTML = `<div class="empty-state"><div class="empty-icon">💬</div><p>Añade una chica para poder chatear con ella.</p></div>`;
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon">💬</div><p>Añade una chica para poder chatear.</p></div>`;
     return;
   }
-
   const g = currentChatGirl ? state.girls.find(x => x.id === currentChatGirl) : state.girls[0];
   if (!g) return;
   currentChatGirl = g.id;
+  const freeMsgs = state.freeChatMessages || 0;
 
   c.innerHTML = `
-    <div style="display:flex;gap:12px;align-items:center;margin-bottom:20px;flex-wrap:wrap">
-      ${state.girls.map(girl => `
-        <button class="btn ${girl.id === g.id ? 'btn-primary' : 'btn-ghost'} btn-sm" onclick="switchChat('${girl.id}')">${girl.emoji} ${girl.name}</button>
-      `).join('')}
+    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
+      ${state.girls.map(girl => `<button class="btn ${girl.id === g.id ? 'btn-primary' : 'btn-ghost'} btn-sm" onclick="switchChat('${girl.id}')">${girl.emoji} ${girl.name}</button>`).join('')}
     </div>
-
-    <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
-      <div style="font-size:32px">${g.emoji}</div>
-      <div>
-        <div style="font-weight:600;font-size:16px">${g.name}</div>
-        <div style="font-size:12px;color:var(--text2)">${g.tags.join(' · ')} — ${g.love}% enamorada</div>
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+      <span style="font-size:30px">${g.emoji}</span>
+      <div style="flex:1">
+        <div style="font-weight:600">${g.name}</div>
+        <div style="font-size:12px;color:var(--text2)">${g.tags.join(' · ')} · ❤️ ${g.love}%</div>
       </div>
-      <div style="margin-left:auto;font-size:12px;color:var(--text3)">Mensaje cuesta <strong style="color:var(--accent)">5 PI</strong></div>
+      <div style="font-size:12px;color:var(--text3)">
+        ${freeMsgs > 0 ? `<span style="color:var(--green)">${freeMsgs} msgs gratis</span>` : '5 PI por mensaje'}
+      </div>
     </div>
-
     <div class="chat-wrap">
       <div class="chat-messages" id="chatMessages">
         ${g.chatHistory.length === 0 ? `<div style="text-align:center;color:var(--text3);font-size:13px;margin:auto">Saluda a ${g.name}... 💬</div>` : ''}
-        ${g.chatHistory.map(m => `
-          <div class="msg ${m.role}">
-            <div class="msg-bubble">${m.text}</div>
-            <div class="msg-time">${m.time || ''}</div>
-          </div>
-        `).join('')}
+        ${g.chatHistory.map(m => `<div class="msg ${m.role}"><div class="msg-bubble">${m.text}</div><div class="msg-time">${m.time||''}</div></div>`).join('')}
       </div>
       <div class="chat-input-bar">
         <input class="chat-input" id="chatInput" placeholder="Escribe algo..." onkeydown="if(event.key==='Enter')sendChat()">
         <button class="chat-send" id="chatSendBtn" onclick="sendChat()">➤</button>
       </div>
     </div>
-    <div style="font-size:11px;color:var(--text3);margin-top:8px;text-align:right">Tienes <strong style="color:var(--accent)">${state.points} PI</strong> disponibles</div>
+    <div style="font-size:11px;color:var(--text3);margin-top:8px;display:flex;justify-content:space-between">
+      <span>💡 También puedes proponerle salir aquí</span>
+      <span>PI: <strong style="color:var(--accent)">${state.points}</strong> · 🪙 <strong style="color:var(--gold)">${state.coins}</strong></span>
+    </div>
   `;
-
-  // Scroll to bottom
   const msgs = document.getElementById('chatMessages');
   if (msgs) msgs.scrollTop = msgs.scrollHeight;
 }
@@ -2034,7 +2461,8 @@ function switchChat(girlId) {
 }
 
 async function sendChat() {
-  if (state.points < 5) { toast('Necesitas 5 PI para enviar un mensaje', 'error', '⚠'); return; }
+  const freeMsgs = state.freeChatMessages || 0;
+  if (freeMsgs === 0 && state.points < 5) { toast('Necesitas 5 PI', 'error', '⚠'); return; }
 
   const input = document.getElementById('chatInput');
   const msg = input.value.trim();
@@ -2043,112 +2471,151 @@ async function sendChat() {
   const g = state.girls.find(x => x.id === currentChatGirl);
   if (!g) return;
 
-  state.points -= 5;
+  if (freeMsgs > 0) state.freeChatMessages = freeMsgs - 1;
+  else state.points -= 5;
   save();
   updateHeader();
 
   const now = new Date().toLocaleTimeString('es-ES', {hour:'2-digit',minute:'2-digit'});
   g.chatHistory.push({ role: 'user', text: msg, time: now });
-
   input.value = '';
   input.disabled = true;
   document.getElementById('chatSendBtn').disabled = true;
 
-  // Show typing
   const msgs = document.getElementById('chatMessages');
   const typingDiv = document.createElement('div');
-  typingDiv.className = 'msg her';
-  typingDiv.id = 'typingIndicator';
+  typingDiv.className = 'msg her'; typingDiv.id = 'chatTyping';
   typingDiv.innerHTML = `<div class="typing-indicator"><div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div></div>`;
   msgs.appendChild(typingDiv);
   msgs.scrollTop = msgs.scrollHeight;
 
-  const history = g.chatHistory.slice(-10);
-  const sys = `Eres ${g.name}, una chica con la siguiente personalidad: ${g.tags.join(', ')}. ${g.desc}
-Estás chateando con alguien que te importa. Tu nivel de enamoramiento actual es ${g.love}%. 
-Responde de forma natural y coherente con tu personalidad. Respuestas cortas (1-3 frases). En español. No repitas lo que te dicen, responde de forma genuina y con tu propio estilo.`;
+  // Check if proposing a date
+  const proposingDate = /sal|cita|quedar|plan|ir a|acompañar|llevarte|invit/i.test(msg);
 
+  const sys = `Eres ${g.name}. Personalidad: ${g.tags.join(', ')}. ${g.desc}
+Nivel de enamoramiento: ${g.love}%. ${g.love < 30 ? 'Estás un poco fría y reservada.' : g.love > 70 ? 'Estás muy enamorada.' : 'Estás bien, pero con cierta reserva.'}
+${g.goodMoodUntil && g.goodMoodUntil > Date.now() ? 'Hoy estás de muy buen humor, eres más receptiva.' : ''}
+${g.rival ? 'Últimamente otro chico también te presta atención. Eso te hace sentir algo confusa.' : ''}
+Responde de forma natural (1-3 frases). En español. Refleja tu personalidad real.
+${proposingDate ? 'Si te proponen salir y el nivel de amor es >40, acepta con entusiasmo o con reserva según tu personalidad. Si es <30, duda o pide tiempo.' : ''}
+Al final, incluye: [EVAL:+X] o [EVAL:-X] donde X es el impacto en el amor (entre -8 y +6).`;
+
+  const history = g.chatHistory.slice(-12);
   const messages = [
-    {role:'system', content:sys},
+    {role:'system', content: sys},
     ...history.map(m => ({role: m.role === 'user' ? 'user' : 'assistant', content: m.text}))
   ];
 
   try {
-    const reply = await callGroq(messages, 200);
-
+    const reply = await callGroq(messages, 220);
     typingDiv.remove();
 
+    const evalMatch = reply.match(/\[EVAL:([+-]?\d+)\]/);
+    const evalVal = evalMatch ? parseInt(evalMatch[1]) : 0;
+    const cleanReply = reply.replace(/\[EVAL:[+-]?\d+\]/g, '').trim();
+
     const replyTime = new Date().toLocaleTimeString('es-ES', {hour:'2-digit',minute:'2-digit'});
-    g.chatHistory.push({ role: 'her', text: reply, time: replyTime });
+    g.chatHistory.push({ role: 'her', text: cleanReply, time: replyTime });
 
-    // Analyze sentiment to affect love
-    const sentiment = analyzeSentiment(msg, reply, g);
-    g.love = Math.max(0, Math.min(100, g.love + sentiment));
+    g.love = Math.max(0, Math.min(100, g.love + evalVal));
     g.status = getStatus(g.love);
-    save();
 
+    // If she proposes a date back (detected by keywords in her reply)
+    if (/quedamos|claro que sí|encantaría|apuntada|me parece bien|cuando quieras|de acuerdo|sí, claro|venga/i.test(cleanReply) && proposingDate) {
+      g.scheduledDate = g.scheduledDate || { date: new Date(Date.now() + 2*86400000).toISOString().slice(0,16), place: 'Sorpresa' };
+      toast(`${g.name} aceptó la cita 🎉 ¡Agéndala en Citas!`, 'success', '🌸');
+    }
+
+    save();
     renderChat(document.getElementById('content'));
   } catch(e) {
     typingDiv.remove();
     input.disabled = false;
     document.getElementById('chatSendBtn').disabled = false;
-    toast('Error en el chat', 'error', '⚠');
+    toast('Error de conexión', 'error', '⚠');
   }
-}
-
-function analyzeSentiment(userMsg, reply, g) {
-  // Simple heuristic: if reply contains positive words, love goes up
-  const positive = /amor|bonito|feliz|genial|sí|encanta|quiero|especial|gracias|bien|perfecto/i.test(reply);
-  const negative = /no|mal|molesta|cansada|déjame|basta|enfad/i.test(reply);
-  if (positive) return 1;
-  if (negative) return -2;
-  return 0;
 }
 
 function openChatWith(girlId) {
   currentChatGirl = girlId;
   showSection('chat');
-  const chatNotif = document.getElementById('chatNotif');
-  if (chatNotif) chatNotif.style.display = 'none';
+  const el = document.getElementById('chatNotif');
+  if (el) el.style.display = 'none';
+}
+
+// ---- API ----
+async function callGroq(messages, max_tokens=400) {
+  const res = await fetch(GROQ_URL, {
+    method:'POST',
+    headers:{'Content-Type':'application/json','Authorization':`Bearer ${GROQ_KEY}`},
+    body: JSON.stringify({ model:'llama-3.1-8b-instant', max_tokens, temperature:0.85, messages })
+  });
+  const d = await res.json();
+  return d.choices?.[0]?.message?.content || '';
 }
 
 // ---- Init ----
 updateHeader();
 showSection('tareas');
 
-// Random events every 90 seconds
-setInterval(() => {
-  if (state.girls.length > 0 && Math.random() < 0.4) {
-    generateRandomEvent();
-    // Show notif indicator
-    const notifEl = document.getElementById('chatNotif');
-    if (notifEl) notifEl.style.display = 'block';
-    if (document.querySelector('.nav-btn.active')?.id === 'nav-tareas') {
-      showSection('tareas');
-    }
-  }
-}, 90000);
+// Attach ctx to date modal after render (patch runDateConversation)
+const _origOpen = openOverlay;
 
-// Daily streak decay - if not completed tasks, reduce love slightly
+// Override to inject ctx
+async function runDateConversation(act, g, fromSchedule = false) {
+  const hasBuff = state.dateBuff && state.dateBuff.girlId === g.id;
+  const buffBonus = hasBuff ? state.dateBuff.bonus : 0;
+  if (hasBuff) { state.dateBuff = null; save(); }
+  const ctx = {
+    act, girl: g, messages: [], loveChange: 0, phase: 0, buffBonus,
+    maxExchanges: act.depth === 1 ? 4 : act.depth === 2 ? 6 : 8,
+  };
+
+  openOverlay(`
+    <div class="modal wide" id="dateModal">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
+        <span style="font-size:28px">${g.emoji}</span>
+        <div>
+          <div style="font-weight:700;font-size:16px">${act.icon} ${act.name} con ${g.name}</div>
+          <div style="font-size:12px;color:var(--text2)">📍 ${act.location} ${hasBuff ? '· ✨ Buff activo' : ''}</div>
+        </div>
+        <div style="margin-left:auto">
+          <div id="dateLoveIndicator" style="font-size:12px;color:var(--accent)">❤️ ${g.love}%</div>
+          <div id="dateProgress" style="font-size:11px;color:var(--text3)">Inicio</div>
+        </div>
+      </div>
+      <div id="dateChatMessages" class="chat-messages" style="height:300px;background:var(--surface2);border-radius:12px;border:1px solid var(--border);margin-bottom:12px;padding:14px"></div>
+      <div id="dateChatInput" style="display:flex;gap:8px">
+        <input class="chat-input" id="dateInput" placeholder="Respóndele..." onkeydown="if(event.key==='Enter')sendDateMessage()" style="flex:1">
+        <button class="chat-send" id="dateSendBtn" onclick="sendDateMessage()">➤</button>
+      </div>
+      <div id="dateSummary" style="display:none"></div>
+    </div>
+  `);
+
+  // Store ctx on modal
+  const modal = document.getElementById('dateModal');
+  if (modal) modal._ctx = ctx;
+
+  await initDateConversation(ctx);
+}
+
+// Daily streak decay
 (function checkDailyDecay() {
-  const today = new Date().toDateString();
-  if (state.lastTaskDate && state.lastTaskDate !== today) {
+  if (state.lastTaskDate) {
     const last = new Date(state.lastTaskDate);
     const daysDiff = Math.floor((new Date() - last) / 86400000);
-    if (daysDiff > 1) {
-      // Streak broken
-      if (state.streak > 0) {
-        state.streak = 0;
-        state.girls.forEach(g => {
-          g.love = Math.max(0, g.love - 5);
-          g.status = getStatus(g.love);
-        });
-        save();
-        setTimeout(() => toast('Racha rota 💔 Las chicas lo notan...', 'error', '⚠'), 1000);
-      }
+    if (daysDiff > 1 && state.streak > 0) {
+      state.streak = 0;
+      state.girls.forEach(g => { g.love = Math.max(0, g.love - 5); g.status = getStatus(g.love); });
+      save();
+      setTimeout(() => toast('Racha rota 💔 Las chicas lo notan...', 'error', '⚠'), 1500);
     }
   }
 })();
+
+// Check events on load (simulated 4h check)
+setTimeout(checkAndFireEvent, 2000);
 </script>
 </body>
 </html>
